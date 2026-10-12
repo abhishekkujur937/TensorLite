@@ -4,7 +4,8 @@
    '# expect: <text>'. A test passes when tlc.exe exits with code 1 and its
    stderr contains <text>.
 2. Correctness tests: every examples/*.tl (except bench_large.tl) is
-   compiled, run, and compared with the NumPy reference.
+   compiled with every combination of fuse {0,1} x tile {0,16,32,64} x
+   unroll {0,4}, run, and compared with the NumPy reference.
 """
 
 import shutil
@@ -48,9 +49,24 @@ def run_error_test(tl_path):
     return True, message
 
 
-def run_correctness_test(tl_path, flags):
-    """Compiles and runs one example, compares with NumPy. Returns (passed, detail)."""
-    work_dir = TEST_OUT / tl_path.stem
+def flag_combinations():
+    """Returns [(label, flags), ...] for fuse {0,1} x tile {0,16,32,64} x unroll {0,4}."""
+    combinations = []
+    for fuse in [0, 1]:
+        for tile in [0, 16, 32, 64]:
+            for unroll in [0, 4]:
+                label = f"fuse{fuse}_tile{tile}_unroll{unroll}"
+                flags = [f"--tile={tile}", f"--unroll={unroll}"]
+                if fuse == 0:
+                    flags.append("--no-fuse")
+                combinations.append((label, flags))
+    return combinations
+
+
+def run_correctness_test(tl_path, flags, label):
+    """Compiles and runs one example with one flag combination, compares with
+    NumPy. Returns (passed, max_err or error message)."""
+    work_dir = TEST_OUT / tl_path.stem / label
     if work_dir.exists():
         shutil.rmtree(work_dir)   # no old .out.bin files can make a test pass
     work_dir.mkdir(parents=True)
@@ -67,7 +83,7 @@ def run_correctness_test(tl_path, flags):
     except RuntimeError as error:
         return False, str(error)
 
-    return status == "PASS", f"max_err={max_err:.2e}"
+    return status == "PASS", max_err
 
 
 def main():
@@ -90,18 +106,34 @@ def main():
         print(f"  {status}  {tl_path.name:<22} {detail}")
 
     print()
-    print("Correctness tests (default flags)")
+    combinations = flag_combinations()
+    print(f"Correctness tests ({len(combinations)} flag combinations per example)")
     for tl_path in sorted(EXAMPLES_DIR.glob("*.tl")):
         if tl_path.name == "bench_large.tl":
             continue
-        ok, detail = run_correctness_test(tl_path, [])
-        if ok:
+
+        example_passed = 0
+        example_max_err = 0.0
+        failures = []
+        for label, flags in combinations:
+            ok, detail = run_correctness_test(tl_path, flags, label)
+            if ok:
+                passed += 1
+                example_passed += 1
+                if detail > example_max_err:
+                    example_max_err = detail
+            else:
+                failed += 1
+                failures.append(f"{label}: {detail}")
+
+        if len(failures) == 0:
             status = "PASS"
-            passed += 1
         else:
             status = "FAIL"
-            failed += 1
-        print(f"  {status}  {tl_path.name:<22} {detail}")
+        print(f"  {status}  {tl_path.name:<22} {example_passed}/{len(combinations)} combinations"
+              f"  max_err={example_max_err:.2e}")
+        for failure in failures:
+            print(f"        FAIL {failure}")
 
     print()
     print(f"{passed} passed, {failed} failed")

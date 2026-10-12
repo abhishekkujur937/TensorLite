@@ -69,6 +69,8 @@ int main(int argc, char** argv)
     bool flag_dump_ir = false;
     bool flag_no_passes = false;
     bool flag_no_fuse = false;
+    int tile = 0;
+    int unroll = 0;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -82,6 +84,24 @@ int main(int argc, char** argv)
             flag_no_passes = true;
         } else if (arg == "--no-fuse") {
             flag_no_fuse = true;
+        } else if (arg.rfind("--tile=", 0) == 0) {
+            // Only the exact values 0, 16, 32, 64 are allowed.
+            std::string value = arg.substr(7);
+            if (value == "0" || value == "16" || value == "32" || value == "64") {
+                tile = std::stoi(value);
+            } else {
+                print_usage();
+                return 1;
+            }
+        } else if (arg.rfind("--unroll=", 0) == 0) {
+            // Only the exact values 0 and 4 are allowed.
+            std::string value = arg.substr(9);
+            if (value == "0" || value == "4") {
+                unroll = std::stoi(value);
+            } else {
+                print_usage();
+                return 1;
+            }
         } else if (arg == "-o") {
             // The next argument is the output file.
             if (i + 1 >= argc) {
@@ -174,8 +194,8 @@ int main(int argc, char** argv)
     if (!output_path.empty()) {
         CodegenOptions options;
         options.fused = !flag_no_fuse;
-        options.tile = 0;         // --tile is added in S11
-        options.unroll = 0;       // --unroll is added in S11
+        options.tile = tile;
+        options.unroll = unroll;
         options.source_name = file_name_only(input_path);
 
         // Binary mode: lines end in \n only, exactly as written.

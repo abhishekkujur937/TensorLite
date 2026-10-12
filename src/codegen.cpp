@@ -1,6 +1,4 @@
 #include <cstddef>
-#include <cstdlib>
-#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -91,61 +89,155 @@ static std::vector<const Node*> param_nodes(const Graph& graph)
 // Kernels: one function per op, each writes a loop nest
 // ---------------------------------------------------------------------------
 
-// C[M,N] = A[M,K] x B[K,N], loop order i, j, k
-static void emit_matmul(std::ostream& os, const Node* node)
+// "k" for step 0, "k + 2" for step 2: used to write out the 4 unrolled steps.
+static std::string plus(const std::string& var, int step)
 {
-    const Node* a = node->inputs[0];
-    const Node* b = node->inputs[1];
-    int M = a->shape[0];
-    int K = a->shape[1];
-    int N = b->shape[1];
-    std::string A = c_name(a);
-    std::string B = c_name(b);
+    if (step == 0) {
+        return var;
+    }
+    return var + " + " + std::to_string(step);
+}
+
+// The bias element for output [i][j] of the fused kernel:
+// bias [N] → "b1[j]" (same for every row), bias [M,N] → "b1[i * N + j]".
+static std::string bias_element(const Node* bias, int N)
+{
+    if (bias->shape.size() == 2) {
+        return c_name(bias) + "[i * " + std::to_string(N) + " + j]";
+    }
+    return c_name(bias) + "[j]";
+}
+
+// Naive matmul, loop order i, j, k (CLAUDE.md Section 10).
+// bias == nullptr → plain matmul: C = acc.
+// bias != nullptr → fused kernel: C = relu(acc + bias). No buffer for the
+//                   matmul or add result is needed.
+// unroll == 4     → the k loop does 4 steps per pass, then a remainder loop
+//                   for the last K % 4 steps.
+static void emit_matmul_naive(std::ostream& os, const Node* node, const Node* bias, int unroll)
+{
+    int M = node->inputs[0]->shape[0];
+    int K = node->inputs[0]->shape[1];
+    int N = node->inputs[1]->shape[1];
+    std::string A = c_name(node->inputs[0]);
+    std::string B = c_name(node->inputs[1]);
     std::string C = c_name(node);
 
     os << "    for (int i = 0; i < " << M << "; i++) {\n";
     os << "        for (int j = 0; j < " << N << "; j++) {\n";
     os << "            float acc = 0.0f;\n";
-    os << "            for (int k = 0; k < " << K << "; k++) {\n";
-    os << "                acc += " << A << "[i * " << K << " + k] * " << B << "[k * " << N << " + j];\n";
-    os << "            }\n";
-    os << "            " << C << "[i * " << N << " + j] = acc;\n";
+
+    if (unroll == 4) {
+        os << "            int k = 0;\n";
+        os << "            for (; k + 3 < " << K << "; k += 4) {\n";
+        for (int step = 0; step < 4; step++) {
+            os << "                acc += " << A << "[i * " << K << " + " << plus("k", step) << "] * "
+               << B << "[(" << plus("k", step) << ") * " << N << " + j];\n";
+        }
+        os << "            }\n";
+        os << "            for (; k < " << K << "; k++) {\n";
+        os << "                acc += " << A << "[i * " << K << " + k] * " << B << "[k * " << N << " + j];\n";
+        os << "            }\n";
+    } else {
+        os << "            for (int k = 0; k < " << K << "; k++) {\n";
+        os << "                acc += " << A << "[i * " << K << " + k] * " << B << "[k * " << N << " + j];\n";
+        os << "            }\n";
+    }
+
+    if (bias == nullptr) {
+        os << "            " << C << "[i * " << N << " + j] = acc;\n";
+    } else {
+        os << "            acc += " << bias_element(bias, N) << ";\n";
+        os << "            " << C << "[i * " << N << " + j] = acc > 0.0f ? acc : 0.0f;\n";
+    }
+
     os << "        }\n";
     os << "    }\n";
 }
 
-// C[M,N] = relu(A[M,K] x B[K,N] + bias), loop order i, j, k.
-// Same as matmul, but bias and relu are applied to acc before storing,
-// so the matmul and add results never need their own buffers.
-static void emit_fused(std::ostream& os, const Node* node)
+// Tiled matmul (CLAUDE.md Section 10): the output is computed in T x T tiles,
+// and K is walked in steps of T, so the A, B and C pieces in use stay small
+// enough to remain in cache. Inner order i, k, j: the innermost loop walks
+// B and C along a row, i.e. through consecutive memory.
+// tl_min() bounds handle sizes that are not a multiple of T.
+// bias != nullptr → after the whole K sum of a tile is done, add bias + relu.
+// unroll == 4     → the innermost j loop does 4 steps per pass + remainder.
+static void emit_matmul_tiled(std::ostream& os, const Node* node, const Node* bias, int tile, int unroll)
 {
-    const Node* a = node->inputs[0];
-    const Node* b = node->inputs[1];
-    const Node* bias = node->inputs[2];
-    int M = a->shape[0];
-    int K = a->shape[1];
-    int N = b->shape[1];
-    std::string A = c_name(a);
-    std::string B = c_name(b);
-    std::string BIAS = c_name(bias);
+    int M = node->inputs[0]->shape[0];
+    int K = node->inputs[0]->shape[1];
+    int N = node->inputs[1]->shape[1];
+    std::string A = c_name(node->inputs[0]);
+    std::string B = c_name(node->inputs[1]);
     std::string C = c_name(node);
+    int T = tile;
 
-    // bias [N] is the same for every row; bias [M,N] has one value per element.
-    std::string bias_index = "[j]";
-    if (bias->shape.size() == 2) {
-        bias_index = "[i * " + std::to_string(N) + " + j]";
+    os << "    for (int ii = 0; ii < " << M << "; ii += " << T << ") {\n";
+    os << "        int i_end = tl_min(ii + " << T << ", " << M << ");\n";
+    os << "        for (int jj = 0; jj < " << N << "; jj += " << T << ") {\n";
+    os << "            int j_end = tl_min(jj + " << T << ", " << N << ");\n";
+
+    os << "            /* zero the output tile */\n";
+    os << "            for (int i = ii; i < i_end; i++) {\n";
+    os << "                for (int j = jj; j < j_end; j++) {\n";
+    os << "                    " << C << "[i * " << N << " + j] = 0.0f;\n";
+    os << "                }\n";
+    os << "            }\n";
+
+    os << "            for (int kk = 0; kk < " << K << "; kk += " << T << ") {\n";
+    os << "                int k_end = tl_min(kk + " << T << ", " << K << ");\n";
+    os << "                for (int i = ii; i < i_end; i++) {\n";
+    os << "                    for (int k = kk; k < k_end; k++) {\n";
+    os << "                        float a_ik = " << A << "[i * " << K << " + k];\n";
+
+    if (unroll == 4) {
+        os << "                        int j = jj;\n";
+        os << "                        for (; j + 3 < j_end; j += 4) {\n";
+        for (int step = 0; step < 4; step++) {
+            os << "                            " << C << "[i * " << N << " + " << plus("j", step) << "] += a_ik * "
+               << B << "[k * " << N << " + " << plus("j", step) << "];\n";
+        }
+        os << "                        }\n";
+        os << "                        for (; j < j_end; j++) {\n";
+        os << "                            " << C << "[i * " << N << " + j] += a_ik * " << B << "[k * " << N << " + j];\n";
+        os << "                        }\n";
+    } else {
+        os << "                        for (int j = jj; j < j_end; j++) {\n";
+        os << "                            " << C << "[i * " << N << " + j] += a_ik * " << B << "[k * " << N << " + j];\n";
+        os << "                        }\n";
     }
 
-    os << "    for (int i = 0; i < " << M << "; i++) {\n";
-    os << "        for (int j = 0; j < " << N << "; j++) {\n";
-    os << "            float acc = 0.0f;\n";
-    os << "            for (int k = 0; k < " << K << "; k++) {\n";
-    os << "                acc += " << A << "[i * " << K << " + k] * " << B << "[k * " << N << " + j];\n";
+    os << "                    }\n";
+    os << "                }\n";
     os << "            }\n";
-    os << "            acc += " << BIAS << bias_index << ";\n";
-    os << "            " << C << "[i * " << N << " + j] = acc > 0.0f ? acc : 0.0f;\n";
+
+    if (bias != nullptr) {
+        os << "            /* bias + relu on the finished tile */\n";
+        os << "            for (int i = ii; i < i_end; i++) {\n";
+        os << "                for (int j = jj; j < j_end; j++) {\n";
+        os << "                    float v = " << C << "[i * " << N << " + j] + " << bias_element(bias, N) << ";\n";
+        os << "                    " << C << "[i * " << N << " + j] = v > 0.0f ? v : 0.0f;\n";
+        os << "                }\n";
+        os << "            }\n";
+    }
+
     os << "        }\n";
     os << "    }\n";
+}
+
+// matmul or fused_matmul_add_relu: picks the naive or tiled loop nest.
+static void emit_matmul_kernel(std::ostream& os, const Node* node, const CodegenOptions& options)
+{
+    const Node* bias = nullptr;
+    if (node->op == OpKind::FusedMatMulAddRelu) {
+        bias = node->inputs[2];
+    }
+
+    if (options.tile == 0) {
+        emit_matmul_naive(os, node, bias, options.unroll);
+    } else {
+        emit_matmul_tiled(os, node, bias, options.tile, options.unroll);
+    }
 }
 
 // add / mul. Same shape → one loop over all elements.
@@ -192,7 +284,8 @@ static void emit_relu(std::ostream& os, const Node* node)
 // tl_forward(...)
 // ---------------------------------------------------------------------------
 
-static void emit_forward(std::ostream& os, const Graph& graph, const std::vector<Node*>& order)
+static void emit_forward(std::ostream& os, const Graph& graph, const std::vector<Node*>& order,
+                         const CodegenOptions& options)
 {
     // Signature: inputs/weights as const float*, then outputs as float*.
     os << "void tl_forward(";
@@ -245,7 +338,7 @@ static void emit_forward(std::ostream& os, const Graph& graph, const std::vector
 
         switch (node->op) {
             case OpKind::MatMul:
-                emit_matmul(os, node);
+                emit_matmul_kernel(os, node, options);
                 break;
             case OpKind::Add:
                 emit_elementwise(os, node, "+");
@@ -257,7 +350,7 @@ static void emit_forward(std::ostream& os, const Graph& graph, const std::vector
                 emit_relu(os, node);
                 break;
             case OpKind::FusedMatMulAddRelu:
-                emit_fused(os, node);
+                emit_matmul_kernel(os, node, options);
                 break;
             case OpKind::Input:
             case OpKind::Weight:
@@ -480,6 +573,20 @@ void emit_c(const Graph& graph, const CodegenOptions& options, std::ostream& os)
     }
     os << "\n";
 
-    emit_forward(os, graph, order);
+    // Tiled loops need min() for tile bounds; C has no built-in min for ints.
+    // "static inline" → no warning if a program has no matmul to use it.
+    if (options.tile > 0) {
+        os << "/* smaller of two ints, for tile bounds */\n";
+        os << "static inline int tl_min(int a, int b)\n";
+        os << "{\n";
+        os << "    if (a < b) {\n";
+        os << "        return a;\n";
+        os << "    }\n";
+        os << "    return b;\n";
+        os << "}\n";
+        os << "\n";
+    }
+
+    emit_forward(os, graph, order, options);
     emit_main(os, graph);
 }

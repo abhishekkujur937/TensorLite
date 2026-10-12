@@ -1144,10 +1144,34 @@ Recorded so later stages, the README, and future sessions stay consistent.
 - Header `fuse=1` means the fusion pass ran (no `--no-fuse`), even if 0 chains were fused.
 - Fusion still runs with `--no-passes` (only `--no-fuse` skips it).
 
+**S11 Tiling + unrolling**
+- One naive emitter and one tiled emitter serve both plain matmul and the fused kernel
+  (`bias == nullptr` → plain). `emit_matmul_kernel()` picks naive (`tile == 0`) or tiled.
+- Tiled kernels accumulate directly in the output array `C`: each `T x T` output tile is
+  zeroed first, then `+=` over all `kk` blocks; the fused kernel applies bias + relu to the
+  tile only after the full K sum is done.
+- `tl_min()` is emitted as `static inline` and only when `tile > 0` (`static inline` →
+  no unused-function warning if a program has no matmul).
+- Unroll 4: naive unrolls the `k` loop, tiled unrolls the innermost `j` loop, both with a
+  remainder loop. The order of additions is unchanged, so results are bit-identical to
+  the non-unrolled version.
+- `--tile=` / `--unroll=` values are matched as exact strings: `--tile=016` is rejected.
+- `run_tests.py` runs 16 combinations per example in `build\test_out\<example>\<combo>\`,
+  prints one summary line per example plus every failing combination. Full run ≈ 3.5 min.
+- **bench_large tolerance (decided): `rtol=1e-4, atol=1e-3` for `bench_large.tl` only, in
+  S12's `bench.py`. Every other check keeps `rtol=1e-4, atol=1e-4` (Section 4).**
+  Reason: with K = 1024 and two layers, float32 rounding error grows with the size of the
+  summed terms, not of the result. Where large terms cancel to a small output, the absolute
+  error reaches ~4e-4, so 97 of 262144 elements missed `atol=1e-4`. It is rounding, not a
+  bug: naive code (no tiling, no fusion) fails identically, and both our result (6e-4) and
+  NumPy float32 (3e-4) differ from exact float64 math — just in different ways, because the
+  C loop adds in order 0, 1, 2… while NumPy's BLAS adds in blocks. `atol=1e-3` passes.
+
 **Known limitation (not fixed on purpose)**
 - Tensor names are emitted unchanged into C; names that collide with C keywords, `main`
-  locals (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`, `median`), or `windows.h`
-  macros break compilation. Listed in the README (S13); fix would be
+  locals (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`, `median`), kernel locals
+  (`i`, `j`, `k`, `ii`, `jj`, `kk`, `i_end`, `j_end`, `k_end`, `acc`, `a_ik`, `v`, `tl_min`),
+  or `windows.h` macros break compilation. Listed in the README (S13); fix would be
   name mangling.
 
 When a later stage makes a new decision that this file does not cover, add it here.
