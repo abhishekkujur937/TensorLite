@@ -114,6 +114,40 @@ static void emit_matmul(std::ostream& os, const Node* node)
     os << "    }\n";
 }
 
+// C[M,N] = relu(A[M,K] x B[K,N] + bias), loop order i, j, k.
+// Same as matmul, but bias and relu are applied to acc before storing,
+// so the matmul and add results never need their own buffers.
+static void emit_fused(std::ostream& os, const Node* node)
+{
+    const Node* a = node->inputs[0];
+    const Node* b = node->inputs[1];
+    const Node* bias = node->inputs[2];
+    int M = a->shape[0];
+    int K = a->shape[1];
+    int N = b->shape[1];
+    std::string A = c_name(a);
+    std::string B = c_name(b);
+    std::string BIAS = c_name(bias);
+    std::string C = c_name(node);
+
+    // bias [N] is the same for every row; bias [M,N] has one value per element.
+    std::string bias_index = "[j]";
+    if (bias->shape.size() == 2) {
+        bias_index = "[i * " + std::to_string(N) + " + j]";
+    }
+
+    os << "    for (int i = 0; i < " << M << "; i++) {\n";
+    os << "        for (int j = 0; j < " << N << "; j++) {\n";
+    os << "            float acc = 0.0f;\n";
+    os << "            for (int k = 0; k < " << K << "; k++) {\n";
+    os << "                acc += " << A << "[i * " << K << " + k] * " << B << "[k * " << N << " + j];\n";
+    os << "            }\n";
+    os << "            acc += " << BIAS << bias_index << ";\n";
+    os << "            " << C << "[i * " << N << " + j] = acc > 0.0f ? acc : 0.0f;\n";
+    os << "        }\n";
+    os << "    }\n";
+}
+
 // add / mul. Same shape → one loop over all elements.
 // A[M,N] with B[N] → B[j] is reused for every row i.
 static void emit_elementwise(std::ostream& os, const Node* node, const char* symbol)
@@ -223,8 +257,8 @@ static void emit_forward(std::ostream& os, const Graph& graph, const std::vector
                 emit_relu(os, node);
                 break;
             case OpKind::FusedMatMulAddRelu:
-                std::cerr << "internal error: fused kernel is not implemented yet (S10)\n";
-                std::exit(1);
+                emit_fused(os, node);
+                break;
             case OpKind::Input:
             case OpKind::Weight:
             case OpKind::Const:

@@ -68,6 +68,7 @@ int main(int argc, char** argv)
     bool flag_dump_ast = false;
     bool flag_dump_ir = false;
     bool flag_no_passes = false;
+    bool flag_no_fuse = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -79,6 +80,8 @@ int main(int argc, char** argv)
             flag_dump_ir = true;
         } else if (arg == "--no-passes") {
             flag_no_passes = true;
+        } else if (arg == "--no-fuse") {
+            flag_no_fuse = true;
         } else if (arg == "-o") {
             // The next argument is the output file.
             if (i + 1 >= argc) {
@@ -160,9 +163,17 @@ int main(int argc, char** argv)
         }
     }
 
+    if (!flag_no_fuse) {
+        FusionStats stats = run_fusion(graph);
+        if (flag_dump_ir) {
+            std::cerr << "Fusion: fused " << stats.fused << " chains, refused " << stats.refused << "\n";
+            graph.print(std::cout, "after fusion");
+        }
+    }
+
     if (!output_path.empty()) {
         CodegenOptions options;
-        options.fused = false;    // fusion is added in S10
+        options.fused = !flag_no_fuse;
         options.tile = 0;         // --tile is added in S11
         options.unroll = 0;       // --unroll is added in S11
         options.source_name = file_name_only(input_path);

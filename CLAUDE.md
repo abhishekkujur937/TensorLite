@@ -1127,6 +1127,23 @@ Recorded so later stages, the README, and future sessions stay consistent.
 - One walk in topo order folds whole chains (e.g. `relu(add(a, b))` then `add(c, a)` →
   folded 3).
 
+**S10 Fusion**
+- `run_fusion()` returns `FusionStats { int fused; int refused; }` (declared in `passes.h`)
+  and runs `run_dce()` at the end.
+- `refused` counts only chains where the `relu ← add ← matmul` pattern matched but a
+  legality check failed. A relu that is not on that pattern (e.g. `relu(matmul(x, w))`) is
+  neither fused nor refused.
+- The matmul may be either input of the add (`add(b, matmul(x, w))` also fuses); the other
+  input is the bias. With the matmul second, the bias can only be 2D `[M,N]`: a 1D bias
+  first is already rejected by S4 (`shape mismatch in add: [5] and [8,5]`).
+- The IR printer's op column widens to fit the longest op text + 1 space (needed for
+  `fused_matmul_add_relu %0, %1, %2`). Graphs without fused nodes keep the 22-wide layout.
+- Bias `[N]` is read as `bias[j]`; bias `[M,N]` as `bias[i * N + j]`.
+- The fused node takes the relu's name; if the relu was an output, the output moves to the
+  fused node.
+- Header `fuse=1` means the fusion pass ran (no `--no-fuse`), even if 0 chains were fused.
+- Fusion still runs with `--no-passes` (only `--no-fuse` skips it).
+
 **Known limitation (not fixed on purpose)**
 - Tensor names are emitted unchanged into C; names that collide with C keywords, `main`
   locals (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`, `median`), or `windows.h`

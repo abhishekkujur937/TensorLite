@@ -18,6 +18,14 @@ int run_cse(Graph& graph);
 // Constant folding. Returns the number of folded nodes. Defined in constfold.cpp.
 int run_constfold(Graph& graph);
 
+struct FusionStats {
+    int fused;      // chains turned into one fused node
+    int refused;    // chains that matched but were not legal to fuse
+};
+
+// matmul+add+relu fusion (runs DCE at the end). Defined in fusion.cpp.
+FusionStats run_fusion(Graph& graph);
+
 struct CodegenOptions {
     bool fused;                 // was fusion run (shown in the header comment)
     int tile;                   // 0 = no tiling

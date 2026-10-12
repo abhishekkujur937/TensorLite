@@ -166,39 +166,50 @@ static std::string shape_text(const std::vector<int>& shape)
     return text;
 }
 
+// "matmul %0, %1" or "const 0.5": the op column of the dump.
+static std::string op_text(const Node* node)
+{
+    std::ostringstream text;
+    text << op_name(node->op);
+    if (node->op == OpKind::Const) {
+        text << " " << node->const_value;
+    }
+    for (std::size_t i = 0; i < node->inputs.size(); i++) {
+        if (i == 0) {
+            text << " ";
+        } else {
+            text << ", ";
+        }
+        text << "%" << node->inputs[i]->id;
+    }
+    return text.str();
+}
+
 // Prints the graph in topo order, in the format of CLAUDE.md Section 9.
 void Graph::print(std::ostream& os, const std::string& title) const
 {
     os << "=== IR " << title << " ===\n";
 
     // Name column is at least 4 wide, wider if a name is longer.
+    // Op column is at least 22 wide, wider if an op text is longer
+    // (+1 so there is always a space before the shape).
     std::size_t name_width = 4;
+    std::size_t op_width = 22;
     for (const std::unique_ptr<Node>& node : nodes) {
         if (node->name.size() > name_width) {
             name_width = node->name.size();
         }
+        std::size_t op_length = op_text(node.get()).size();
+        if (op_length + 1 > op_width) {
+            op_width = op_length + 1;
+        }
     }
 
     for (Node* node : topo_order()) {
-        // "matmul %0, %1" or "const 0.5"
-        std::ostringstream op_text;
-        op_text << op_name(node->op);
-        if (node->op == OpKind::Const) {
-            op_text << " " << node->const_value;
-        }
-        for (std::size_t i = 0; i < node->inputs.size(); i++) {
-            if (i == 0) {
-                op_text << " ";
-            } else {
-                op_text << ", ";
-            }
-            op_text << "%" << node->inputs[i]->id;
-        }
-
         std::string id_text = "%" + std::to_string(node->id);
         os << std::left << std::setw(4) << id_text
            << std::setw(static_cast<int>(name_width)) << node->name << " = "
-           << std::setw(22) << op_text.str()
+           << std::setw(static_cast<int>(op_width)) << op_text(node)
            << shape_text(node->shape) << "\n";
     }
 
