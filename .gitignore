@@ -1,0 +1,8 @@
+.venv/
+build/
+tlc.exe
+*.exe
+*.o
+bench/out/
+*.bin
+__pycache__/
