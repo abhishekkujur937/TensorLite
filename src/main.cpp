@@ -41,6 +41,16 @@ static std::string read_file(const std::string& path)
     return ss.str();
 }
 
+// "examples\mlp.tl" → "mlp.tl" (drops the folder part).
+static std::string file_name_only(const std::string& path)
+{
+    std::size_t slash = path.find_last_of("/\\");
+    if (slash == std::string::npos) {
+        return path;
+    }
+    return path.substr(slash + 1);
+}
+
 // Prints one token per line: line:col  KIND  'text'
 static void dump_tokens(const std::vector<Token>& tokens)
 {
@@ -53,6 +63,7 @@ static void dump_tokens(const std::vector<Token>& tokens)
 int main(int argc, char** argv)
 {
     std::string input_path;
+    std::string output_path;
     bool flag_dump_tokens = false;
     bool flag_dump_ast = false;
     bool flag_dump_ir = false;
@@ -65,6 +76,14 @@ int main(int argc, char** argv)
             flag_dump_ast = true;
         } else if (arg == "--dump-ir") {
             flag_dump_ir = true;
+        } else if (arg == "-o") {
+            // The next argument is the output file.
+            if (i + 1 >= argc) {
+                print_usage();
+                return 1;
+            }
+            i++;
+            output_path = argv[i];
         } else if (!arg.empty() && arg[0] == '-') {
             // Unknown flag. Other flags are added in later stages.
             print_usage();
@@ -112,6 +131,21 @@ int main(int argc, char** argv)
         graph.print(std::cout, "after shape inference");
     }
 
-    // C code generation is added in S5.
+    if (!output_path.empty()) {
+        CodegenOptions options;
+        options.fused = false;    // fusion is added in S10
+        options.tile = 0;         // --tile is added in S11
+        options.unroll = 0;       // --unroll is added in S11
+        options.source_name = file_name_only(input_path);
+
+        // Binary mode: lines end in \n only, exactly as written.
+        std::ofstream out(output_path, std::ios::binary);
+        if (!out) {
+            std::cerr << "error: " << output_path << ": cannot write file\n";
+            return 1;
+        }
+        emit_c(graph, options, out);
+    }
+
     return 0;
 }
