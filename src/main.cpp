@@ -9,6 +9,7 @@
 #include "ir.h"
 #include "lexer.h"
 #include "parser.h"
+#include "passes.h"
 #include "token.h"
 
 // Prints how to use tlc.exe. Used when the command line is wrong.
@@ -105,6 +106,12 @@ int main(int argc, char** argv)
         graph.print(std::cout, "after lowering");
     }
 
-    // Shape inference is added in S4.
+    infer_shapes(graph, input_path);
+
+    if (flag_dump_ir) {
+        graph.print(std::cout, "after shape inference");
+    }
+
+    // C code generation is added in S5.
     return 0;
 }
