@@ -370,7 +370,7 @@ read file (binary mode, whole file into a string)
 → lex
 → parse              (--dump-ast)
 → lower to IR        (--dump-ir "after lowering")
-→ infer shapes
+→ infer shapes       (--dump-ir "after shape inference")
 → unless --no-passes:
      DCE             (--dump-ir "after DCE")
      CSE             (--dump-ir "after CSE")
@@ -413,13 +413,24 @@ Required messages (tests match on these substrings):
 %1  w1   = weight                [128,256]
 %2  b1   = weight                [256]
 %3  w2   = weight                [256,10]
+%4  t4   = matmul %0, %1         ?
+%5  t5   = add %4, %2            ?
+%6  h    = relu %5               ?
+%7  y    = matmul %6, %3         ?
+outputs: y(%7)
+=== IR after shape inference ===
+%0  x    = input                 [64,128]
+%1  w1   = weight                [128,256]
+%2  b1   = weight                [256]
+%3  w2   = weight                [256,10]
 %4  t4   = matmul %0, %1         [64,256]
 %5  t5   = add %4, %2            [64,256]
 %6  h    = relu %5               [64,256]
 %7  y    = matmul %6, %3         [64,10]
 outputs: y(%7)
 ```
-Shapes show `?` before shape inference has run.
+Shapes show `?` before shape inference has run. Declared nodes (input/weight/const) show
+their declared shape from the start.
 
 ---
 
@@ -743,7 +754,7 @@ error.
 - `void infer_shapes(Graph&, const std::string& filename)`.
 - Walk topo order; set `shape` per Section 6 op rules; report errors with node line/col.
 - Check zero dims and the no-output rule.
-- Create all 10 error files from Section 11.
+- Create the remaining 4 error files from Section 11 (6 already exist from S1–S3).
 - First version of `tests\run_tests.py`: runs `tlc.exe` on every `tests\errors\*.tl` via
   `subprocess.run`, checks exit code 1 and expected substring; prints PASS/FAIL per file and
   a summary. Uses `pathlib` for all paths.

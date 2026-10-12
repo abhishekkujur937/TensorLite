@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "ast.h"
+#include "ir.h"
 #include "lexer.h"
 #include "parser.h"
 #include "token.h"
@@ -53,6 +54,7 @@ int main(int argc, char** argv)
     std::string input_path;
     bool flag_dump_tokens = false;
     bool flag_dump_ast = false;
+    bool flag_dump_ir = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -60,6 +62,8 @@ int main(int argc, char** argv)
             flag_dump_tokens = true;
         } else if (arg == "--dump-ast") {
             flag_dump_ast = true;
+        } else if (arg == "--dump-ir") {
+            flag_dump_ir = true;
         } else if (!arg.empty() && arg[0] == '-') {
             // Unknown flag. Other flags are added in later stages.
             print_usage();
@@ -95,6 +99,12 @@ int main(int argc, char** argv)
         dump_ast(program, std::cout);
     }
 
-    // Lowering to IR is added in S3.
+    Graph graph = lower(program, input_path);
+
+    if (flag_dump_ir) {
+        graph.print(std::cout, "after lowering");
+    }
+
+    // Shape inference is added in S4.
     return 0;
 }
