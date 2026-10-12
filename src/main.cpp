@@ -5,7 +5,9 @@
 #include <string>
 #include <vector>
 
+#include "ast.h"
 #include "lexer.h"
+#include "parser.h"
 #include "token.h"
 
 // Prints how to use tlc.exe. Used when the command line is wrong.
@@ -50,11 +52,14 @@ int main(int argc, char** argv)
 {
     std::string input_path;
     bool flag_dump_tokens = false;
+    bool flag_dump_ast = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--dump-tokens") {
             flag_dump_tokens = true;
+        } else if (arg == "--dump-ast") {
+            flag_dump_ast = true;
         } else if (!arg.empty() && arg[0] == '-') {
             // Unknown flag. Other flags are added in later stages.
             print_usage();
@@ -83,6 +88,13 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    // The parser is added in S2.
+    Parser parser(tokens, input_path);
+    Program program = parser.parse_program();
+
+    if (flag_dump_ast) {
+        dump_ast(program, std::cout);
+    }
+
+    // Lowering to IR is added in S3.
     return 0;
 }
