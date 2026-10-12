@@ -1,4 +1,12 @@
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "lexer.h"
+#include "token.h"
 
 // Prints how to use tlc.exe. Used when the command line is wrong.
 static void print_usage()
@@ -15,16 +23,66 @@ static void print_usage()
     std::cerr << "  --unroll=N       0 (default) | 4\n";
 }
 
+// Reads the whole file into a string. Binary mode, so Windows does not
+// change any bytes; the lexer handles \r itself.
+static std::string read_file(const std::string& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        std::cerr << "error: " << path << ": cannot open file\n";
+        std::exit(1);
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// Prints one token per line: line:col  KIND  'text'
+static void dump_tokens(const std::vector<Token>& tokens)
+{
+    for (const Token& tok : tokens) {
+        std::cout << tok.line << ":" << tok.col << "  "
+                  << token_kind_name(tok.kind) << "  '" << tok.text << "'\n";
+    }
+}
+
 int main(int argc, char** argv)
 {
-    (void)argv;
+    std::string input_path;
+    bool flag_dump_tokens = false;
 
-    if (argc < 2) {
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--dump-tokens") {
+            flag_dump_tokens = true;
+        } else if (!arg.empty() && arg[0] == '-') {
+            // Unknown flag. Other flags are added in later stages.
+            print_usage();
+            return 1;
+        } else if (input_path.empty()) {
+            input_path = arg;
+        } else {
+            // A second input file is not allowed.
+            print_usage();
+            return 1;
+        }
+    }
+
+    if (input_path.empty()) {
         print_usage();
         return 1;
     }
 
-    // The compiler pipeline is added stage by stage, starting in S1.
-    print_usage();
-    return 1;
+    std::string source = read_file(input_path);
+
+    Lexer lexer(source, input_path);
+    std::vector<Token> tokens = lexer.tokenize();
+
+    if (flag_dump_tokens) {
+        dump_tokens(tokens);
+        return 0;
+    }
+
+    // The parser is added in S2.
+    return 0;
 }

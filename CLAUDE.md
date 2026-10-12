@@ -130,9 +130,10 @@ numpy>=2.3
 | Item | Decision |
 |---|---|
 | OS | Windows 10/11, native |
-| Toolchain | MinGW-w64 GCC (MSYS2 mingw64) — `g++` for the compiler, `gcc` for generated C |
+| Toolchain | MinGW-w64 GCC 14.2 from MSYS2 **mingw64** (`C:\msys64\mingw64\bin`) — `g++` for the compiler, `gcc` for generated C |
 | Language | C++17 for the compiler, C for generated output |
-| Compiler flags | `g++ -std=c++17 -Wall -Wextra -O2 -g` |
+| Compiler flags | `g++ -std=c++17 -Wall -Wextra -O2 -g -static-libstdc++ -static-libgcc` |
+| Static runtime | `tlc.exe` links the C++ runtime statically. Reason: an older `libstdc++-6.dll` (from `C:\iverilog\bin`) comes earlier on PATH and crashed `tlc.exe` with an access violation. Static linking removes any dependency on PATH order. Do not remove these flags. |
 | Build system | `build.bat` (one script, rebuilds everything — project is small) |
 | Binary | `tlc.exe` |
 | Shell | PowerShell |
@@ -624,7 +625,7 @@ All commands below are run in **PowerShell** from the repo root.
       set SRCS=!SRCS! %%f
   )
 
-  g++ -std=c++17 -Wall -Wextra -O2 -g -o tlc.exe !SRCS!
+  g++ -std=c++17 -Wall -Wextra -O2 -g -static-libstdc++ -static-libgcc -o tlc.exe !SRCS!
   if errorlevel 1 (
       echo BUILD FAILED
       exit /b 1
