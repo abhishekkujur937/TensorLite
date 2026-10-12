@@ -991,6 +991,10 @@ count in the C header goes down; all tests PASS.
    tile size vs cache size, `i,k,j` loop order
 9. Next steps: SIMD (AVX2) codegen, CUDA backend (thread per output → shared-memory tiles),
    INT8 quantization pass, more ops
+10. Known limitations: tensor names are emitted into the generated C unchanged, so a `.tl`
+    name that is a C keyword (`int`, `for`), a local name used in the generated `main()`
+    (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`), or a `windows.h` macro (`near`,
+    `far`, `small`) produces C that does not compile. Not fixed on purpose (no scope creep).
 
 **Done when:** someone on Windows can clone, build, run tests, and run the benchmark from the
 README alone.
