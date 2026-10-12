@@ -11,6 +11,10 @@ void infer_shapes(Graph& graph, const std::string& filename);
 // Dead code elimination. Returns the number of removed nodes. Defined in dce.cpp.
 int run_dce(Graph& graph);
 
+// Common subexpression elimination (runs DCE at the end). Returns the number
+// of merged nodes. Defined in cse.cpp.
+int run_cse(Graph& graph);
+
 struct CodegenOptions {
     bool fused;                 // was fusion run (shown in the header comment)
     int tile;                   // 0 = no tiling

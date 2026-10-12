@@ -141,7 +141,13 @@ int main(int argc, char** argv)
             graph.print(std::cout, "after DCE");
         }
 
-        // CSE (S8), constant folding (S9) and the final DCE go here.
+        int merged = run_cse(graph);
+        if (flag_dump_ir) {
+            std::cerr << "CSE: merged " << merged << " nodes\n";
+            graph.print(std::cout, "after CSE");
+        }
+
+        // Constant folding (S9) and the final DCE go here.
     }
 
     if (!output_path.empty()) {

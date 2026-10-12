@@ -429,8 +429,11 @@ outputs: y(%7)
 %7  y    = matmul %6, %3         [64,10]
 outputs: y(%7)
 ```
-Shapes show `?` before shape inference has run. Declared nodes (input/weight/const) show
-their declared shape from the start.
+- Computed nodes show `?` until shape inference has run. Declared nodes (input / weight /
+  const) show their shapes from the start.
+- The name column widens to fit the longest name in the graph.
+- Any valid topological order is acceptable; nodes that become ready at the same time may
+  print in either order.
 
 ---
 
@@ -724,7 +727,8 @@ error.
 
 **Build:**
 - `Graph` methods from Section 7.
-- `lower(const Program&) → Graph`:
+- `lower(const Program&, const std::string& filename) → Graph` (filename is used in error
+  messages):
   - Symbol table `std::unordered_map<std::string, Node*>`.
   - Decl → Input / Weight / Const node.
   - Assign → recursively lower the expression; each call becomes one node; the top node gets
@@ -754,7 +758,9 @@ error.
 - `void infer_shapes(Graph&, const std::string& filename)`.
 - Walk topo order; set `shape` per Section 6 op rules; report errors with node line/col.
 - Check zero dims and the no-output rule.
-- Create the remaining 4 error files from Section 11 (6 already exist from S1–S3).
+- Create the remaining 4 error files from Section 11 (`matmul_mismatch`, `add_mismatch`,
+  `zero_dim`, `no_output`). The other 6 already exist from S1–S3.
+- Add the `--dump-ir` "after shape inference" dump (Section 8).
 - First version of `tests\run_tests.py`: runs `tlc.exe` on every `tests\errors\*.tl` via
   `subprocess.run`, checks exit code 1 and expected substring; prints PASS/FAIL per file and
   a summary. Uses `pathlib` for all paths.
@@ -819,7 +825,8 @@ gcc -O2 -Wall -Wextra build\mlp.c -o build\mlp.exe
 
 ### S7 — Dead code elimination + `--dump-ir` per pass (45 min)
 
-**Files:** `dce.cpp`, update `ir.cpp`, `main.cpp`.
+**Files:** `dce.cpp`, update `passes.h`, `main.cpp`. (`Graph::erase_unreachable()` in
+`ir.cpp` already exists from S3.)
 
 **Build:**
 - Mark phase: start from `graph.outputs`, walk `inputs` backwards (DFS/stack), mark all
@@ -845,10 +852,18 @@ gcc -O2 -Wall -Wextra build\mlp.c -o build\mlp.exe
 - Skip Input / Weight / Const.
 - Key = op + list of input node ids. For `add` and `mul` sort the two input ids
   (commutative). For `matmul` do NOT sort.
+- Key format: `"<op>:<id>,<id>"`, e.g. `"matmul:0,1"`.
 - `std::map<std::string, Node*>` keyed by that string: if key seen →
-  `replace_all_uses(duplicate, first)`; if duplicate is an output, move the output to `first`.
-- Run DCE afterwards to delete the now-unused duplicate.
-- Print `CSE: merged N nodes`.
+  `replace_all_uses(duplicate, first)`.
+- **Output rules:**
+  - If the duplicate is an output and `first` is not: move the output to `first` **and
+    rename `first` to the output's name** (the output name is the C parameter name and the
+    `<name>.out.bin` file, so it must survive).
+  - If **both** are outputs: do **not** merge (each output needs its own parameter and file;
+    one node cannot have two names).
+- Run DCE afterwards (`run_dce`) to delete the now-unused duplicate.
+- Returns the number of merged nodes. Print `CSE: merged N nodes`.
+- One pass catches chains (duplicate matmul → duplicate relu → merged 2) because of topo order.
 
 **Run:** `.\tlc.exe examples\duplicate.tl --dump-ir`
 
@@ -991,10 +1006,15 @@ count in the C header goes down; all tests PASS.
    tile size vs cache size, `i,k,j` loop order
 9. Next steps: SIMD (AVX2) codegen, CUDA backend (thread per output → shared-memory tiles),
    INT8 quantization pass, more ops
-10. Known limitations: tensor names are emitted into the generated C unchanged, so a `.tl`
-    name that is a C keyword (`int`, `for`), a local name used in the generated `main()`
-    (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`), or a `windows.h` macro (`near`,
-    `far`, `small`) produces C that does not compile. Not fixed on purpose (no scope creep).
+10. Known limitations:
+    - **Name collisions in generated C.** Tensor names are emitted unchanged (Section 10), so a
+      `.tl` name that is a C keyword (`int`, `for`), a local in the generated `main`
+      (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`, `median`), or a `windows.h` macro (`near`,
+      `far`, `small`) produces C that does not compile. None of the examples hit this. The fix
+      is **name mangling**: prefix every generated symbol (e.g. `x` → `tl_x`), the same idea
+      real compilers use to keep symbols unique for the linker.
+    - `bench\reference.py` reads one statement per line (all examples follow this).
+    - 1D/2D float32 tensors and 4 ops only.
 
 **Done when:** someone on Windows can clone, build, run tests, and run the benchmark from the
 README alone.
@@ -1025,7 +1045,85 @@ Correctness checking is never skipped.
 
 ---
 
-## 15. Definition of done
+## 15. Decisions made during the build (binding — keep them)
+
+Recorded so later stages, the README, and future sessions stay consistent.
+
+**Toolchain**
+- `tlc.exe` is linked with `-static-libstdc++ -static-libgcc` (old `libstdc++-6.dll` from
+  `C:\iverilog\bin` on PATH crashed it). See Section 4.
+
+**S1 Lexer**
+- `-0.5` lexes as one `Number` token anywhere; a negative dimension is rejected later by
+  shape inference (`dimension must be positive`).
+
+**S2 Parser**
+- Missing-token errors point at the **next** token (e.g. missing `]` on line 2 is reported at
+  `3:1 expected ']' but found 'weight'`). This is normal parser behaviour.
+- `--dump-ast` prints floats with default C++ formatting, so `2.0` shows as `2`. Stored value
+  is exact.
+- Dimensions must be whole numbers: `x[1.5]` → `expected an integer dimension but found
+  '1.5'`. More than 9 digits is rejected the same way (would overflow `int`).
+
+**S3 IR**
+- Node ids are **never reused**; dumps show gaps after a pass removes nodes (`%0, %1, %3`).
+  `%3` always means the same node in every dump.
+- The IR printer's name column widens to the longest name.
+- The IR printer shows a const's value: `s1 = const 0.5`. (S9's done check relies on this.)
+- `lower()` takes the filename as a second parameter for error messages.
+- Any valid topological order is accepted.
+- The 4 lowering error files (`undefined_name`, `redefined`, `unknown_op`, `wrong_arity`)
+  were added in S3, not S4.
+
+**S4 Shapes**
+- `add`/`mul` broadcast is only `A[M,N] op B[N]`; `add(b, x)` with the 1D tensor first is an
+  error.
+- `--dump-ir` has an "after shape inference" dump; "after lowering" shows `?` for computed
+  nodes.
+- `no output` is reported at `1:1` (there is no statement to point at).
+
+**S5 Codegen**
+- `c_name(node)`: input / weight / output → its own name (a `tl_forward` parameter);
+  const → `c_<name>`; every other computed node → `t<id>` (static buffer).
+- `intermediate buffers: N` = number of computed nodes that are not outputs.
+- Float literals are printed with 9 significant digits and always end in `f` with a decimal
+  point (`2.0f`, not `2f`).
+- The fixed C helpers (`read_tensor`, `alloc_tensor`, `write_tensor`, `compare_doubles`) are
+  stored in a C++ raw string `R"C( ... )C"`.
+- Median of an even number of runs = average of the two middle values.
+- The `.c` file is written with `std::ios::binary` (plain `\n` line endings).
+- `-o` without a following path → usage, exit 1.
+
+**S6 Correctness**
+- Each correctness test deletes and recreates `build\test_out\<name>\` so stale `.out.bin`
+  files can never cause a false PASS.
+- Expected `max_err` is ~1e-5, not 0: float addition order differs between the C loops and
+  NumPy's BLAS.
+- The checker was verified to FAIL on a modified output (error 0.01) and a missing file (inf).
+
+**S7 DCE**
+- Mark (stack-based DFS from `graph.outputs` along `inputs`) and sweep live in
+  `Graph::erase_unreachable()` (`ir.cpp`); `run_dce()` in `dce.cpp` returns the removed count.
+- DCE also removes **unused weights and inputs**; they disappear from `tl_forward`'s
+  parameters and their `.bin` files are not loaded. (Real frameworks often keep graph inputs
+  for a stable signature — a deliberate simplification here.)
+- The `--no-passes` flag was added in S7 (DCE is the first pass).
+
+**S8 CSE**
+- Output rules: see S8 in Section 12 (rename `first` to the output's name; never merge two
+  outputs).
+
+**Known limitation (not fixed on purpose)**
+- Tensor names are emitted unchanged into C; names that collide with C keywords, `main`
+  locals (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`, `median`), or `windows.h`
+  macros break compilation. Listed in the README (S13); fix would be
+  name mangling.
+
+When a later stage makes a new decision that this file does not cover, add it here.
+
+---
+
+## 16. Definition of done
 
 - [ ] `.\build.bat` builds `tlc.exe` with zero warnings
 - [ ] Every example compiles; generated C compiles with zero warnings at `-O0` and `-O3`
