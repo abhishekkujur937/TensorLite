@@ -54,8 +54,10 @@ def run_exe(exe_path, data_dir, iters):
     raise RuntimeError(f"no median_ms in output: {result.stdout.strip()}")
 
 
-def check(tl_path, data_dir):
-    """Compares every <name>.out.bin with the NumPy reference.
+def check(tl_path, data_dir, atol=1e-4):
+    """Compares every <name>.out.bin with the NumPy reference using
+    np.allclose(rtol=1e-4, atol=atol). atol is 1e-4 everywhere except
+    bench_large.tl in bench.py (CLAUDE.md Section 15, S11).
     Returns ("PASS" or "FAIL", max abs error)."""
     data_dir = Path(data_dir)
     expected = reference.run_reference(tl_path, data_dir)
@@ -75,7 +77,7 @@ def check(tl_path, data_dir):
         err = float(np.max(np.abs(got - ref)))
         if err > max_err:
             max_err = err
-        if not np.allclose(got, ref, rtol=1e-4, atol=1e-4):
+        if not np.allclose(got, ref, rtol=1e-4, atol=atol):
             status = "FAIL"
 
     return status, max_err

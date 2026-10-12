@@ -200,7 +200,8 @@ tensorlite\
 └── bench\
     ├── reference.py        # independent NumPy interpreter of .tl files
     ├── runner.py           # shared helpers: compile, run, compare
-    └── bench.py            # full benchmark, writes bench\results.md
+    ├── bench.py            # full benchmark, writes bench\results.md
+    └── fusion_check.py     # naive vs fused at -O3, alternating (Section 15, S12)
 ```
 
 ---
@@ -967,7 +968,10 @@ count in the C header goes down; all tests PASS.
   | fused+tile32+unroll4 | `--tile=32 --unroll=4` |
 
 - Each config at `gcc -O0` and `gcc -O3`.
-- Iterations: 3 at `-O0`, 10 at `-O3` (keep total runtime reasonable).
+- Method (rounds, to avoid order and heat bias): compile all 12 programs once before any
+  timing; then 3 rounds, each running all 12 once in the same order. One run = 1 untimed
+  warm-up + N timed calls (N = 1 at `-O0`, 5 at `-O3`). A row's time = median of its 3
+  round results; the 3 round results are also shown. Every run is checked for correctness.
 - For each row record: median ms, speedup vs `naive -O0`, speedup vs `naive -O3`,
   intermediate buffer count (from the C header comment), correctness PASS/FAIL.
 - Machine info (Windows):
@@ -1166,6 +1170,74 @@ Recorded so later stages, the README, and future sessions stay consistent.
   bug: naive code (no tiling, no fusion) fails identically, and both our result (6e-4) and
   NumPy float32 (3e-4) differ from exact float64 math — just in different ways, because the
   C loop adds in order 0, 1, 2… while NumPy's BLAS adds in blocks. `atol=1e-3` passes.
+
+**S12 Benchmark**
+- `runner.check()` has an optional `atol` parameter (default `1e-4`); only `bench.py` passes
+  `1e-3`. Tests are unchanged.
+- Working files go in `bench\out\` (already in `.gitignore`); inputs in `bench\out\data\`,
+  seed 0. Old `.out.bin` files are deleted before every run.
+- `results.md` has two extra columns beyond the spec: **Buffers eliminated** (naive's buffer
+  count minus this row's — the "buffers eliminated" from Section 10) and **Max abs err**.
+  It also records the run date and the tolerance used.
+- `L2CacheSize` from `Win32_Processor` is the **total over all cores** (i7-1255U: 6656 KB =
+  2 × 1.25 MB P-core + 2 × 2 MB E-core clusters), not the per-core L2. Say so in the README.
+- **Benchmark method (replaces S12's "3 at -O0, 10 at -O3").** The first version ran all
+  -O0 configs, then all -O3 configs. Two runs of it disagreed by 50–100% on the same config
+  (e.g. naive -O3: 2484 vs 3649 ms), and the order was biased: the naive -O3 baseline always
+  ran right after ~3 min of full load, when the 15 W laptop CPU was hottest. Fixed method:
+  - All 12 programs (6 configs × -O0/-O3) are compiled once, before any timing.
+  - 3 rounds; each round runs all 12 programs once, always in the same order.
+  - One run = 1 untimed warm-up + N timed calls, N = 1 at -O0 and 5 at -O3; the program
+    reports the median of its N calls.
+  - A row's time = median of its 3 round results. `results.md` also shows the 3 round
+    results ("Per-round ms") so the noise is visible.
+  - Every run (all 36) is checked against NumPy; a row FAILs if any round fails.
+  - Final numbers: charger plugged in, power mode **Best performance**, heavy apps closed.
+  - `bench.py` exits with code 1 if any row FAILs. One full run takes about 3.5 minutes.
+- **Fusion check (`bench\fusion_check.py`, added on request).** Runs naive -O3 and fused -O3
+  alternately, 3 times each, and prints all 6 times. Result: the gap is **real**: naive
+  2918 / 2789 / 3653 ms vs fused 1310 / 1387 / 1569 ms → 2.10x on the medians.
+  **Cause (verified, not guessed):** gcc's auto-vectorizer. `gcc -O3 -fopt-info-vec-all`
+  shows it vectorizes the `j` loop of the **first fused kernel** (outer-loop vectorization,
+  16-byte SSE vectors: 4 outputs `j..j+3` per step, reading `w1[k*1024 + j..j+3]`
+  contiguously), but **neither naive matmul** and **not the second fused kernel**
+  ("couldn't vectorize loop", "no vectype for stmt" on the A-element load). Layer 1 is 2/3
+  of the work (512×1024×1024 vs 512×1024×512 multiply-adds), so a ~4x faster layer 1 alone
+  predicts ~2x overall. Proof: with `-O3 -fno-tree-vectorize`, naive and fused take the
+  same time (2629 vs 2592 ms, 1.4% apart, i.e. only the saved add/relu passes). So the
+  README must **not** credit the 2x to fusion itself: fusion removes 4 buffers and ~1.4%
+  of the time; the rest is gcc happening to vectorize one fused loop. Why gcc vectorizes
+  that one loop and not the others was not investigated further (gcc internals).
+- **gcc's exact "couldn't vectorize" reasons** (`gcc -O3 -fopt-info-vec-all`, gcc 14.2.0;
+  line numbers are in the generated `.c` files in `bench\out\fusion_check\`):
+  - naive, matmul 1 (`t5 = x × w1`; `i` loop line 21, `j` loop line 22, `k` loop line 24):
+    ```
+    naive_O3.c:21:23: missed: not vectorized: multiple nested loops.
+    naive_O3.c:22:27: missed: couldn't vectorize loop
+    naive_O3.c:25:25: missed: not vectorized: no vectype for stmt: _6 = *_5;
+    naive_O3.c:24:31: missed: couldn't vectorize loop
+    ```
+  - naive, matmul 2 (`t8 = t7 × w2`; lines 41 / 42 / 44):
+    ```
+    naive_O3.c:41:23: missed: not vectorized: multiple nested loops.
+    naive_O3.c:42:27: missed: couldn't vectorize loop
+    naive_O3.c:45:26: missed: not vectorized: no vectype for stmt: _27 = t7[_26];
+    naive_O3.c:44:31: missed: couldn't vectorize loop
+    ```
+  - fused, kernel 2 (`y = relu(t11 × w2 + b2)`; lines 28 / 29 / 31):
+    ```
+    fused_O3.c:28:23: missed: not vectorized: multiple nested loops.
+    fused_O3.c:29:27: missed: couldn't vectorize loop
+    fused_O3.c:32:27: missed: not vectorized: no vectype for stmt: _22 = t11[_21];
+    fused_O3.c:31:31: missed: couldn't vectorize loop
+    ```
+  - What the report says, and only that: the `j` loop (the one vectorized in fused kernel 1)
+    fails with **"no vectype for stmt"** on the load of the **A element** (`x[i*1024 + k]`,
+    `t7[...]`, `t11[...]`) — the value that is the same for every `j`. The `i` loop fails
+    with "multiple nested loops"; the `k` loop gets "couldn't vectorize loop" with no
+    separate reason line. **No aliasing message appears** for any of these loops, so
+    aliasing is not the reported cause. The report does not explain why the same kind of
+    load does get a vector type in fused kernel 1.
 
 **Known limitation (not fixed on purpose)**
 - Tensor names are emitted unchanged into C; names that collide with C keywords, `main`
