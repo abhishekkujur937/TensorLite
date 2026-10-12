@@ -67,6 +67,7 @@ int main(int argc, char** argv)
     bool flag_dump_tokens = false;
     bool flag_dump_ast = false;
     bool flag_dump_ir = false;
+    bool flag_no_passes = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -76,6 +77,8 @@ int main(int argc, char** argv)
             flag_dump_ast = true;
         } else if (arg == "--dump-ir") {
             flag_dump_ir = true;
+        } else if (arg == "--no-passes") {
+            flag_no_passes = true;
         } else if (arg == "-o") {
             // The next argument is the output file.
             if (i + 1 >= argc) {
@@ -129,6 +132,16 @@ int main(int argc, char** argv)
 
     if (flag_dump_ir) {
         graph.print(std::cout, "after shape inference");
+    }
+
+    if (!flag_no_passes) {
+        int removed = run_dce(graph);
+        if (flag_dump_ir) {
+            std::cerr << "DCE: removed " << removed << " nodes\n";
+            graph.print(std::cout, "after DCE");
+        }
+
+        // CSE (S8), constant folding (S9) and the final DCE go here.
     }
 
     if (!output_path.empty()) {
