@@ -147,7 +147,17 @@ int main(int argc, char** argv)
             graph.print(std::cout, "after CSE");
         }
 
-        // Constant folding (S9) and the final DCE go here.
+        int folded = run_constfold(graph);
+        if (flag_dump_ir) {
+            std::cerr << "ConstFold: folded " << folded << " nodes\n";
+            graph.print(std::cout, "after constant folding");
+        }
+
+        int removed_final = run_dce(graph);
+        if (flag_dump_ir) {
+            std::cerr << "DCE: removed " << removed_final << " nodes\n";
+            graph.print(std::cout, "after final DCE");
+        }
     }
 
     if (!output_path.empty()) {

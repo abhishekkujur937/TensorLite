@@ -1113,6 +1113,20 @@ Recorded so later stages, the README, and future sessions stay consistent.
 - Output rules: see S8 in Section 12 (rename `first` to the output's name; never merge two
   outputs).
 
+**S9 Constant folding**
+- `run_constfold()` returns the folded count; it does not delete anything. The old nodes and
+  the now-unused input constants are removed by the final DCE.
+- The "after constant folding" dump briefly shows two nodes with the same name (the new
+  const and the old node it replaced, e.g. `%7 scale = const 1` and `%4 scale = mul ...`);
+  the old one disappears after final DCE.
+- The new const keeps the replaced node's name, including generated names (`t5` → C array
+  `c_t5`).
+- If the folded node is an output, the output moves to the new const; codegen then fills
+  the output parameter directly with the value.
+- Const values print with default C++ formatting: S9's "value `1.0`" shows as `const 1`.
+- One walk in topo order folds whole chains (e.g. `relu(add(a, b))` then `add(c, a)` →
+  folded 3).
+
 **Known limitation (not fixed on purpose)**
 - Tensor names are emitted unchanged into C; names that collide with C keywords, `main`
   locals (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`, `median`), or `windows.h`

@@ -15,6 +15,9 @@ int run_dce(Graph& graph);
 // of merged nodes. Defined in cse.cpp.
 int run_cse(Graph& graph);
 
+// Constant folding. Returns the number of folded nodes. Defined in constfold.cpp.
+int run_constfold(Graph& graph);
+
 struct CodegenOptions {
     bool fused;                 // was fusion run (shown in the header comment)
     int tile;                   // 0 = no tiling
