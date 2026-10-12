@@ -147,8 +147,8 @@ numpy>=2.3
 | IR memory | `Graph` owns nodes in `std::vector<std::unique_ptr<Node>>`; edges are non-owning `Node*` |
 | Topological sort | Kahn's algorithm |
 | Generated C | One `.c` file with `tl_forward(...)` and `main()` |
-| Timing | `QueryPerformanceCounter` (`<windows.h>`) inside generated C, median of N runs |
-| Correctness | `np.allclose(out, ref, rtol=1e-4, atol=1e-4)` |
+| Timing | `QueryPerformanceCounter` (`<windows.h>`) inside generated C; the program prints the median of its N timed calls. `bench.py` reports the median of 3 interleaved rounds (Section 15, S12) |
+| Correctness | `np.allclose(out, ref, rtol=1e-4, atol=1e-4)`. Only exception: `bench_large.tl` in `bench.py` uses `atol=1e-3` (Section 15, S11) |
 | Dependencies | C++: standard library only. Python: `numpy` only |
 | Version control | One git commit per stage |
 
@@ -1013,8 +1013,10 @@ count in the C header goes down; all tests PASS.
 10. Known limitations:
     - **Name collisions in generated C.** Tensor names are emitted unchanged (Section 10), so a
       `.tl` name that is a C keyword (`int`, `for`), a local in the generated `main`
-      (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`, `median`), or a `windows.h` macro (`near`,
-      `far`, `small`) produces C that does not compile. None of the examples hit this. The fix
+      (`dir`, `iters`, `times`, `freq`, `start`, `end`, `it`, `median`), a local in a kernel
+      (`i`, `j`, `k`, `ii`, `jj`, `kk`, `i_end`, `j_end`, `k_end`, `acc`, `a_ik`, `v`,
+      `tl_min`), or a `windows.h` macro (`near`, `far`, `small`) produces C that does not
+      compile. None of the examples hit this. The fix
       is **name mangling**: prefix every generated symbol (e.g. `x` → `tl_x`), the same idea
       real compilers use to keep symbols unique for the linker.
     - `bench\reference.py` reads one statement per line (all examples follow this).
