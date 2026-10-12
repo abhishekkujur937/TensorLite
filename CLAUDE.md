@@ -1181,6 +1181,13 @@ Recorded so later stages, the README, and future sessions stay consistent.
   It also records the run date and the tolerance used.
 - `L2CacheSize` from `Win32_Processor` is the **total over all cores** (i7-1255U: 6656 KB =
   2 × 1.25 MB P-core + 2 × 2 MB E-core clusters), not the per-core L2. Say so in the README.
+- **L1 from Task Manager: 928 KB** (read by the user). This is also a **total over all cores,
+  instruction + data**: 2 P-cores × (48 KB data + 32 KB instruction) = 160 KB, plus 8 E-cores
+  × (32 KB data + 64 KB instruction) = 768 KB. The per-core split is Intel's published spec
+  for the i7-1255U, not measured here. For the README's "tile size vs cache size" point use
+  the **per-core L1 data cache: 48 KB (P-core) / 32 KB (E-core)**. For reference: one
+  `T × T` float tile is `4·T²` bytes, so the A, B and C tiles together are 3 KB at T = 16,
+  12 KB at T = 32 and 48 KB at T = 64.
 - **Benchmark method (replaces S12's "3 at -O0, 10 at -O3").** The first version ran all
   -O0 configs, then all -O3 configs. Two runs of it disagreed by 50–100% on the same config
   (e.g. naive -O3: 2484 vs 3649 ms), and the order was biased: the naive -O3 baseline always
@@ -1238,6 +1245,27 @@ Recorded so later stages, the README, and future sessions stay consistent.
     separate reason line. **No aliasing message appears** for any of these loops, so
     aliasing is not the reported cause. The report does not explain why the same kind of
     load does get a vector type in fused kernel 1.
+
+**S13 README**
+- The benchmark table and machine info are copied verbatim from `bench\results.md` (run of
+  2026-10-12 13:32); L1 (928 KB, Task Manager) is added by hand with the total-vs-per-core
+  note.
+- New finding used in the README: `gcc -O3 -fopt-info-vec-optimized` on
+  `bench\out\fused_tile32_O3.c` shows gcc **vectorizes the innermost `j` loop of both tiled
+  kernels** (and the bias + relu tile loops), with runtime alias checks ("loop versioned
+  for vectorization because of possible aliasing"). So the tiled -O3 speedup is cache
+  locality + SIMD together; the -O0 tiled speedup (no vectorization) is locality alone.
+- The README credits fusion only with removing 4 of 5 buffers. Its -O0 time effect is
+  stated as within the noise (naive and fused per-round times overlap), and fusion's own
+  saving is cited as ~1.4% from the `-fno-tree-vectorize` diagnostic. The 2.11x at -O3 is
+  attributed to gcc's vectorizer (S12 fusion check).
+- The README opens with "Results at a glance" (after the summary): 17.4× vs naive -O3
+  with tiling (`fused+tile64`, 1796 → 103 ms), 4 of 5 buffers eliminated, 106 tests
+  (10 error tests + 96 runs checked against NumPy). The `-fno-tree-vectorize`
+  comparison is labelled as a one-off diagnostic, not a `bench.py` result (rule 9).
+- The README makes no claim that unrolling helps: in the final run, `tile32` and
+  `tile32+unroll4` per-round times overlap.
+- Known limitations in the README use the full list from this section (incl. kernel locals).
 
 **Known limitation (not fixed on purpose)**
 - Tensor names are emitted unchanged into C; names that collide with C keywords, `main`
