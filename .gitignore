@@ -6,3 +6,5 @@ tlc.exe
 bench/out/
 *.bin
 __pycache__/
+claude.md
+

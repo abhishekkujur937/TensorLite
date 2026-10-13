@@ -33,6 +33,28 @@ checked against an independent NumPy implementation. Everything runs natively on
   → bench.py       (timing + NumPy check)
 ```
 
+### Data flow
+```mermaid
+flowchart TD
+    TL[".tl file"]
+    subgraph TLC ["tlc.exe"]
+        LEX["Lexer"] -- tokens --> PAR["Parser"]
+        PAR -- AST --> LOW["Lowering"]
+        LOW -- graph IR --> SHP["Shape check"]
+        SHP -- "IR + shapes" --> PAS["DCE → CSE → ConstFold → DCE"]
+        PAS -- optimized IR --> FUS["Fusion"]
+        FUS -- fused IR --> GEN["Codegen"]
+    end
+    TL --> LEX
+    GEN -- ".c file" --> GCC["gcc"]
+    GCC -- ".exe" --> RUN["Run program"]
+    BIN["name.bin (inputs, weights)"] --> RUN
+    RUN -- "name.out.bin" --> CHK["runner.py check"]
+    TL --> REF["reference.py (NumPy)"]
+    REF -- expected output --> CHK
+    CHK --> RES["PASS / FAIL"]
+```
+
 | Stage | Source |
 |---|---|
 | Lexer | `src\lexer.cpp`, `src\token.h` |
